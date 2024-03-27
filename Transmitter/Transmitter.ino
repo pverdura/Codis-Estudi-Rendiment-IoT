@@ -6,6 +6,7 @@
 #include <DS18B20.h>
 
 DS18B20 ds(2);
+
 //#define LORA_BAND    433
 #define LORA_BAND    868
 //#define LORA_BAND    915
@@ -50,7 +51,7 @@ void setup() {
   digitalWrite(OLED_RST, HIGH);*/
 
   display.init();
-  //display.flipScreenVertically();
+  display.flipScreenVertically();
 
   showLogo();
   delay(2000);
@@ -73,9 +74,33 @@ void setup() {
 }
 
 void loop() {
-  static int counter = 0;
-  //int temp;
+  static long SignalBW[] = {7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, 500E3};
+
+  static int counter = 0;   // To keep track of the number of packages sent
+  static int sf = 7;        // Spread Factor
+  static int bw = 7;        // Bandwidth
+  static int cr = 4;        // Coding Rate
+
+  if (bw == 9 and cr == 8) {  // We used all combinations of bandwidth and coding rate with this sp
+      sf = (sf-5)%7 + 6; // Change the spread spectrum
+  }
+
+  if (cr == 8) {  // We used all types of coding rates with this bw
+    bw = (bw+1)%10; // Change the bandwidth
+  }
+
+  cr = (cr-4)%4 + 5;
+  
+  LoRa.setSpreadingFactor(sf);
+  LoRa.setCodingRate4(cr);
+  LoRa.setSignalBandwidth(SignalBW[bw]);
+
+#if 0
   temp = ds.getTempC();
+#else // We will do the transmission without a sensor, so we send a random digit
+  temp = random()%10000; 
+#endif
+  
   Serial.print("Temperature: ");
   Serial.print(temp);
   Serial.print(" C / ");
@@ -84,23 +109,35 @@ void loop() {
   Serial.print("bat volt: ");
   Serial.print(bat);
   Serial.print(" / ");
+  Serial.print("SF: ");
+  Serial.print(sf);
+  Serial.print("BW: ");
+  Serial.print(SignalBW[bw]);
+  Serial.print(" / ");
+  
   // send packet
-  LoRa.beginPacket();
+  LoRa.beginPacket(sf == 6);
   LoRa.print("counter = ");
   LoRa.print(counter);
-  LoRa.print("temp = ");
+  LoRa.print(", temp = ");
   LoRa.print(temp);
-  LoRa.print("bat = ");
-  LoRa.print(bat);  
+  LoRa.print(", bat = ");
+  LoRa.print(bat);
+  LoRa.print(", sf = ");
+  LoRa.print(sf);
+  LoRa.print(", cr = ");
+  LoRa.print(cr);
+  LoRa.print(", bw = "); 
+  LoRa.print(bw);
   LoRa.endPacket();
 
   String countStr = String(counter, DEC);
   Serial.println(countStr);
 
-  displayLoraData(countStr);
+  displayLoraData(countStr, sf, SignalBW[bw], cr);
 
   // toggle the led to give a visual indication the packet was sent
-  digitalWrite(LED, HIGH);
+  digitalWrite(LED, HIGH);  
   delay(250);
   digitalWrite(LED, LOW);
   delay(250);
@@ -109,7 +146,7 @@ void loop() {
   delay(1500);
 }
 
-void displayLoraData(String countStr) {
+void displayLoraData(String countStr, int sf, long bw, int cr) {
   display.clear();
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   display.setFont(ArialMT_Plain_10);
@@ -120,7 +157,14 @@ void displayLoraData(String countStr) {
   display.drawString(90, 10, String(temp, DEC));
   display.drawString(0, 20, "Bat Volt: ");
   display.drawString(90, 20, String(bat, DEC));
-  
+  display.drawString(0, 30, "Spreading factor: ");
+  display.drawString(90, 30, String(sf, DEC));
+  display.drawString(0, 40, "Bandwidth: ");
+  display.drawString(90, 40, String(bw, DEC));
+  display.drawString(0, 50, "Coding rate: ");
+  display.drawString(90, 50, "4 /");
+  display.drawString(104, 50, String(cr, DEC));
+
   display.display();
 }
 

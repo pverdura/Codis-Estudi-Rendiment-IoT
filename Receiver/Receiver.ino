@@ -72,23 +72,49 @@ void setup() {
 }
 
 void loop() {
+  static long SignalBW[] = {7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, 500E3};
+  static int sf = 7;        // Spread Factor
+  static int bw = 7;        // Bandwidth
+  static int cr = 4;        // Coding Rate
+  static bool received = true;
+
+  if (received) {
+    if (bw == 9 and cr == 8) {  // We used all combinations of bandwidth and coding rate with this sp
+        sf = (sf-5)%7 + 6; // Change the spread spectrum
+    }
+
+    if (cr == 8) {  // We used all types of coding rates with this bw
+      bw = (bw+1)%10; // Change the bandwidth
+    }
+
+    cr = (cr-4)%4 + 5;
+  
+    LoRa.setSpreadingFactor(sf);
+    LoRa.setCodingRate4(cr);
+    LoRa.setSignalBandwidth(SignalBW[bw]);
+    received = false;
+  }
+
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
+    received = true;
+
     String packet = "";
     for (int i = 0; i < packetSize; i++) {
       packet += (char)LoRa.read();
     }
-    String rssi = "RSSI " + String(LoRa.packetRssi(), DEC) ;
-    Serial.println(rssi);
+    String rssi = String(LoRa.packetRssi(), DEC);
+    String snr = String(LoRa.packetSnr(), DEC);
+    printLoraData(packetSize, packet, rssi, snr, sf, SignalBW[bw], cr);
 
-    displayLoraData(packetSize, packet, rssi);
+    displayLoraData(packetSize, packet, rssi, cr);
     // toggle the led to give a visual indication the packet was sent
     digitalWrite(LED, !digitalRead(LED));
   }
   delay(10);
 }
 
-void displayLoraData(int packetSize, String packet, String rssi) {
+void displayLoraData(int packetSize, String packet, String rssi, int cr) {
   String packSize = String(packetSize, DEC);
 
   display.clear();
@@ -96,8 +122,22 @@ void displayLoraData(int packetSize, String packet, String rssi) {
   display.setFont(ArialMT_Plain_10);
   display.drawString(0 , 15 , "Received " + packSize + " bytes");
   display.drawStringMaxWidth(0 , 26 , 128, packet);
-  display.drawString(0, 0, rssi);
+  display.drawString(30, 0, rssi);
+  display.drawString(0, 0, "RSSI:");
+  display.drawString(80, 0, "CR:");
+  display.drawString(100, 0, String(cr, DEC));
   display.display();
+}
+
+void printLoraData(int packetSize, String packet, String rssi, String snr, int sf, long bw, int cr) {
+  Serial.println("Packet size:      " + String(packetSize, DEC));
+  Serial.println("Packet:           " + packet);
+  Serial.println("RSSI:             " + rssi);
+  Serial.println("SNR:              " + snr);
+  Serial.println("Spreading factor: " + String(sf, DEC));
+  Serial.println("Bandwidth:        " + String(bw, DEC));
+  Serial.println("Coding rate:      " + String(cr, DEC));
+  Serial.println("------------------------------------");
 }
 
 void showLogo() {
