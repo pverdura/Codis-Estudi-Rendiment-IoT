@@ -22,7 +22,9 @@ DS18B20 ds(2);
 #define RST     23   // GPIO14 -- SX1278's RESET
 #define DI0     26   // GPIO26 -- SX1278's IRQ(Interrupt Request)
 
-#define LED     25
+#define LED     25 
+
+#define MAX(A,B) (A > B ? A : B)
 
 SSD1306 display(0x3c, OLED_SDA, OLED_SCL);
 
@@ -32,6 +34,8 @@ void showLogo();
 
 int temp;
 float bat;
+long TIME_P = 2000;
+long TIME_T = 10000;
 
 void setup() {
   Serial.begin(115200);
@@ -74,13 +78,75 @@ void setup() {
 }
 
 void loop() {
+  ///////////////////////
+  /* INITIALIZE PARAMS */
+  ///////////////////////
   static long SignalBW[] = {7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, 500E3};
 
   static int counter = 0;   // To keep track of the number of packages sent
   static int sf = 7;        // Spread Factor
-  static int bw = 7;        // Bandwidth
-  static int cr = 4;        // Coding Rate
+  static int bw = 0;        // Bandwidth
+  static int cr = 5;        // Coding Rate
 
+  //////////////////
+  /* CHECK PARAMS */
+  //////////////////
+  double packet_time = getTimePayload(sf, cr, SignalBW[bw]);
+  if (packet_time <= TIME_P) {
+    LoRa.setSpreadingFactor(sf);
+    LoRa.setCodingRate4(cr);
+    LoRa.setSignalBandwidth(SignalBW[bw]);
+
+    //////////////
+    /* SEND MSG */
+    //////////////
+    
+    // We will do the transmission without a sensor, so we send a random digit
+    temp = random()%10000;
+
+    // Canonicalize the msg, this way it will contain 64 bytes
+    String countStr = toStringSize(String(counter, DEC),4);
+    String tempStr = toStringSize(String(temp, DEC), 4);
+    String sfStr = toStringSize(String(sf, DEC), 2);
+    
+    bat = analogRead(A7);
+    bat = bat * 0.00168;
+    
+    // Send packet
+    LoRa.beginPacket(sf == 6);
+    LoRa.print("counter = ");
+    LoRa.print(countStr);
+    LoRa.print(", temp = ");
+    LoRa.print(tempStr);
+    LoRa.print(", bat = ");
+    LoRa.print(bat);
+    LoRa.print(", sf = ");
+    LoRa.print(sfStr);
+    LoRa.print(", cr = ");
+    LoRa.print(cr);
+    LoRa.print(", bw = "); 
+    LoRa.print(bw);
+    LoRa.endPacket();
+
+    // Display msg
+    displayLoraData(countStr, sf, SignalBW[bw], cr);
+    
+    // Toggle the led to give a visual indication the packet was sent
+    digitalWrite(LED, HIGH);  
+    delay(250);
+    digitalWrite(LED, LOW);
+    delay(250);
+
+    ////////////////////
+    /* WAIT TIME_T ms */
+    ////////////////////
+    delay(TIME_T-packet_time);
+    counter++;
+  }
+
+  ///////////////////////
+  /* MODIFY PARAMETERS */
+  ///////////////////////
   if (bw == 9 and cr == 8) {  // We used all combinations of bandwidth and coding rate with this sp
       sf = (sf-5)%7 + 6; // Change the spread spectrum
   }
@@ -89,61 +155,50 @@ void loop() {
     bw = (bw+1)%10; // Change the bandwidth
   }
 
-  cr = (cr-4)%4 + 5;
-  
-  LoRa.setSpreadingFactor(sf);
-  LoRa.setCodingRate4(cr);
-  LoRa.setSignalBandwidth(SignalBW[bw]);
+  cr = (cr-4)%4 + 5; // Change the coding rate
+}
 
-#if 0
-  temp = ds.getTempC();
-#else // We will do the transmission without a sensor, so we send a random digit
-  temp = random()%10000; 
-#endif
-  
-  Serial.print("Temperature: ");
-  Serial.print(temp);
-  Serial.print(" C / ");
-  bat = analogRead(A7);
-  bat = bat * 0.00168;
-  Serial.print("bat volt: ");
-  Serial.print(bat);
-  Serial.print(" / ");
+// Returns the smallest integer bigger than or equal to n
+int roundUp(double n) {
+  int m = int(n);
+  return (double(m) < n ? m+1 : m);
+}
+
+// Returns the symbol time in miliseconds
+double getSymbolTime(int sf, long bw) {
+  return (2 << (sf-1))*1000/bw;
+}
+
+// Returns the number of symbols of the payload
+int getNumSymbols(int sf, int cr, int pl, int crc, int ih, int de) {
+  double num = 8*pl - 4*sf + 28 - 16*crc - 20*ih;
+  double denom = 4*(sf-(2*de));
+  int n = roundUp(num/denom);
+  return 8 + MAX(n*cr,0);
+}
+
+double getTimePayload(int sf, int cr, long bw) {
   Serial.print("SF: ");
   Serial.print(sf);
-  Serial.print("BW: ");
-  Serial.print(SignalBW[bw]);
-  Serial.print(" / ");
-  
-  // send packet
-  LoRa.beginPacket(sf == 6);
-  LoRa.print("counter = ");
-  LoRa.print(counter);
-  LoRa.print(", temp = ");
-  LoRa.print(temp);
-  LoRa.print(", bat = ");
-  LoRa.print(bat);
-  LoRa.print(", sf = ");
-  LoRa.print(sf);
-  LoRa.print(", cr = ");
-  LoRa.print(cr);
-  LoRa.print(", bw = "); 
-  LoRa.print(bw);
-  LoRa.endPacket();
+  Serial.print(", CR: ");
+  Serial.print(cr);
+  Serial.print(", BW: ");
+  Serial.println(bw);
 
-  String countStr = String(counter, DEC);
-  Serial.println(countStr);
+  double ts = getSymbolTime(sf, bw);
+  int ih = (sf == 6); // With a SF = 6 we must activate the implicit header
+  int de = (ts > 16); // Inrease robustness if the symbol is more than 16ms
+  int np = getNumSymbols(sf, cr, 64, 0, ih, de);
+  return ts*np;
+}
 
-  displayLoraData(countStr, sf, SignalBW[bw], cr);
+String toStringSize(String num, int size) {
+  int n = num.length();
 
-  // toggle the led to give a visual indication the packet was sent
-  digitalWrite(LED, HIGH);  
-  delay(250);
-  digitalWrite(LED, LOW);
-  delay(250);
-
-  counter++;
-  delay(1500);
+  for (int i = n; i < size; ++i) {
+    num = "0" + num;
+  }
+  return num;
 }
 
 void displayLoraData(String countStr, int sf, long bw, int cr) {

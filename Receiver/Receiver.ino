@@ -16,10 +16,15 @@
 #define MISO    19   // GPIO19 -- SX1278's MISO
 #define MOSI    27   // GPIO27 -- SX1278's MOSI
 #define SS      18   // GPIO18 -- SX1278's CS
-#define RST     23  // GPIO14 -- SX1278's RESET
+#define RST     23   // GPIO14 -- SX1278's RESET
 #define DI0     26   // GPIO26 -- SX1278's IRQ(Interrupt Request)
 
 #define LED     25
+
+#define TIME_P  2000
+#define TIME_T  10000 
+
+#define MAX(A,B) (A > B ? A : B)
 
 SSD1306 display(0x3c, OLED_SDA, OLED_SCL);
 
@@ -72,46 +77,96 @@ void setup() {
 }
 
 void loop() {
+  ///////////////////////
+  /* INITIALIZE PARAMS */
+  ///////////////////////
   static long SignalBW[] = {7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, 500E3};
-  static int sf = 7;        // Spread Factor
-  static int bw = 7;        // Bandwidth
-  static int cr = 4;        // Coding Rate
-  static bool received = true;
-
-  if (received) {
-    if (bw == 9 and cr == 8) {  // We used all combinations of bandwidth and coding rate with this sp
-        sf = (sf-5)%7 + 6; // Change the spread spectrum
-    }
-
-    if (cr == 8) {  // We used all types of coding rates with this bw
-      bw = (bw+1)%10; // Change the bandwidth
-    }
-
-    cr = (cr-4)%4 + 5;
   
+  static int sf = 7;        // Spread Factor
+  static int bw = 0;        // Bandwidth
+  static int cr = 5;        // Coding Rate
+
+  //////////////////
+  /* CHECK PARAMS */
+  //////////////////
+  double packet_time = getTimePayload(sf, cr, SignalBW[bw]);
+  if (packet_time <= TIME_P) {
     LoRa.setSpreadingFactor(sf);
     LoRa.setCodingRate4(cr);
     LoRa.setSignalBandwidth(SignalBW[bw]);
-    received = false;
-  }
 
-  int packetSize = LoRa.parsePacket();
-  if (packetSize) {
-    received = true;
+    //////////////////
+    /* UPDATE TIMER */
+    //////////////////
+    long waitTime = millis();
 
-    String packet = "";
-    for (int i = 0; i < packetSize; i++) {
-      packet += (char)LoRa.read();
+    //////////////////
+    /* WAIT FOR MSG */
+    //////////////////
+    while ((millis() - waitTime) <= TIME_T) {
+      // READ PORTS
+      int packetSize = LoRa.parsePacket();
+      
+      // CHECK IF WE RECEIVED THE MSG
+      if (packetSize) {
+        String packet = "";
+        for (int i = 0; i < packetSize; i++) {
+          packet += (char)LoRa.read();
+        }
+
+        // PRINT THE MSG
+        String rssi = String(LoRa.packetRssi(), DEC);
+        String snr = String(LoRa.packetSnr(), DEC);
+        printLoraData(packetSize, packet, rssi, snr, sf, SignalBW[bw], cr);
+
+        displayLoraData(packetSize, packet, rssi, cr);
+        
+        // Toggle the led to give a visual indication the packet was sent
+        digitalWrite(LED, !digitalRead(LED));
+      }
+      delay(10);
     }
-    String rssi = String(LoRa.packetRssi(), DEC);
-    String snr = String(LoRa.packetSnr(), DEC);
-    printLoraData(packetSize, packet, rssi, snr, sf, SignalBW[bw], cr);
-
-    displayLoraData(packetSize, packet, rssi, cr);
-    // toggle the led to give a visual indication the packet was sent
-    digitalWrite(LED, !digitalRead(LED));
   }
-  delay(10);
+  
+  ///////////////////////
+  /* MODIFY PARAMETERS */
+  ///////////////////////
+  if (bw == 9 and cr == 8) {  // We used all combinations of bandwidth and coding rate with this sp
+      sf = (sf-5)%7 + 6; // Change the spread spectrum
+  }
+
+  if (cr == 8) {  // We used all types of coding rates with this bw
+    bw = (bw+1)%10; // Change the bandwidth
+  }
+
+  cr = (cr-4)%4 + 5; // Change the coding rate
+}
+
+// Returns the smallest integer bigger than or equal to n
+int roundUp(double n) {
+  int m = int(n);
+  return (double(m) < n ? m+1 : m);
+}
+
+// Returns the symbol time in miliseconds
+double getSymbolTime(int sf, long bw) {
+  return (2 << (sf-1))*1000/bw;
+}
+
+// Returns the number of symbols of the payload
+int getNumSymbols(int sf, int cr, int pl, int crc, int ih, int de) {
+  double num = 8*pl - 4*sf + 28 - 16*crc - 20*ih;
+  double denom = 4*(sf-(2*de));
+  int n = roundUp(num/denom);
+  return 8 + MAX(n*cr,0);
+}
+
+double getTimePayload(int sf, int cr, long bw) {
+  double ts = getSymbolTime(sf, bw);
+  int ih = (sf == 6); // With a SF = 6 we must activate the implicit header
+  int de = (ts > 16); // Inrease robustness if the symbol is more than 16ms
+  int np = getNumSymbols(sf, cr, 64, 0, ih, de);
+  return ts*np;
 }
 
 void displayLoraData(int packetSize, String packet, String rssi, int cr) {
