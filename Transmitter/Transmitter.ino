@@ -24,6 +24,9 @@ DS18B20 ds(2);
 
 #define LED     25 
 
+#define MAX_TIME 10000
+#define EXTRA_TIME 3500
+
 #define MAX(A,B) (A > B ? A : B)
 
 SSD1306 display(0x3c, OLED_SDA, OLED_SCL);
@@ -34,8 +37,6 @@ void showLogo();
 
 int temp;
 float bat;
-long TIME_P = 2000;
-long TIME_T = 10000;
 
 void setup() {
   Serial.begin(115200);
@@ -87,39 +88,38 @@ void loop() {
   static int sf = 7;        // Spread Factor
   static int bw = 0;        // Bandwidth
   static int cr = 5;        // Coding Rate
+  static int pow = 0;       // Transmission power
 
   //////////////////
   /* CHECK PARAMS */
   //////////////////
   double packet_time = getTimePayload(sf, cr, SignalBW[bw]);
-  if (packet_time <= TIME_P) {
+  if (packet_time <= MAX_TIME) {
     LoRa.setSpreadingFactor(sf);
     LoRa.setCodingRate4(cr);
     LoRa.setSignalBandwidth(SignalBW[bw]);
+    LoRa.setTxPower(pow);
 
     //////////////
     /* SEND MSG */
     //////////////
-    
-    // We will do the transmission without a sensor, so we send a random digit
-    temp = random()%10000;
-
-    // Canonicalize the msg, this way it will contain 64 bytes
+    Canonicalize the msg, this way it will contain 64 bytes
     String countStr = toStringSize(String(counter, DEC),4);
-    String tempStr = toStringSize(String(temp, DEC), 4);
+    String powStr = toStringSize(String(pow, DEC), 3);
     String sfStr = toStringSize(String(sf, DEC), 2);
-    
+
     bat = analogRead(A7);
     bat = bat * 0.00168;
+    String batStr = toStringSize(String(bat, DEC), 7);
     
     // Send packet
     LoRa.beginPacket(sf == 6);
     LoRa.print("counter = ");
     LoRa.print(countStr);
-    LoRa.print(", temp = ");
-    LoRa.print(tempStr);
+    LoRa.print(", TP = ");
+    LoRa.print(powStr);
     LoRa.print(", bat = ");
-    LoRa.print(bat);
+    LoRa.print(batStr);
     LoRa.print(", sf = ");
     LoRa.print(sfStr);
     LoRa.print(", cr = ");
@@ -129,24 +129,40 @@ void loop() {
     LoRa.endPacket();
 
     // Display msg
-    displayLoraData(countStr, sf, SignalBW[bw], cr);
+    displayLoraData(countStr, sf, SignalBW[bw], cr, pow);
+    
+    Serial.print("======= POW: ");
+    Serial.print(pow);
+    Serial.print(", BW: ");
+    Serial.print(bw);
+    Serial.print(", SF: ");
+    Serial.print(sf);
+    Serial.print(", CR: ");
+    Serial.print(cr);
+    Serial.print(", TIME: ");
+    Serial.print(millis());
+    Serial.println(" =======");
     
     // Toggle the led to give a visual indication the packet was sent
     digitalWrite(LED, HIGH);  
     delay(250);
     digitalWrite(LED, LOW);
     delay(250);
-
-    ////////////////////
-    /* WAIT TIME_T ms */
-    ////////////////////
-    delay(TIME_T-packet_time);
+    
+    //////////////////////
+    /* WAIT PACKET TIME */
+    //////////////////////
+    delay(packet_time+EXTRA_TIME);
     counter++;
   }
 
   ///////////////////////
   /* MODIFY PARAMETERS */
   ///////////////////////
+  if (sf == 12 and bw == 9 and cr == 8) { // We used all cambinations with this transmission power
+    pow = (pow+1)%21;
+  }
+  
   if (bw == 9 and cr == 8) {  // We used all combinations of bandwidth and coding rate with this sp
       sf = (sf-5)%7 + 6; // Change the spread spectrum
   }
@@ -178,13 +194,6 @@ int getNumSymbols(int sf, int cr, int pl, int crc, int ih, int de) {
 }
 
 double getTimePayload(int sf, int cr, long bw) {
-  Serial.print("SF: ");
-  Serial.print(sf);
-  Serial.print(", CR: ");
-  Serial.print(cr);
-  Serial.print(", BW: ");
-  Serial.println(bw);
-
   double ts = getSymbolTime(sf, bw);
   int ih = (sf == 6); // With a SF = 6 we must activate the implicit header
   int de = (ts > 16); // Inrease robustness if the symbol is more than 16ms
@@ -201,15 +210,15 @@ String toStringSize(String num, int size) {
   return num;
 }
 
-void displayLoraData(String countStr, int sf, long bw, int cr) {
+void displayLoraData(String countStr, int sf, long bw, int cr, int pow) {
   display.clear();
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   display.setFont(ArialMT_Plain_10);
   
   display.drawString(0, 0, "Sending packet: ");
   display.drawString(90, 0, countStr);
-  display.drawString(0, 10, "Temperature: ");
-  display.drawString(90, 10, String(temp, DEC));
+  display.drawString(0, 10, "Power: ");
+  display.drawString(90, 10, String(pow, DEC));
   display.drawString(0, 20, "Bat Volt: ");
   display.drawString(90, 20, String(bat, DEC));
   display.drawString(0, 30, "Spreading factor: ");

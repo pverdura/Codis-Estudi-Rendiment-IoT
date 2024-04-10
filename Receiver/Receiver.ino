@@ -21,8 +21,8 @@
 
 #define LED     25
 
-#define TIME_P  2000
-#define TIME_T  10000 
+#define MAX_TIME 10000
+#define EXTRA_TIME 4500
 
 #define MAX(A,B) (A > B ? A : B)
 
@@ -85,15 +85,33 @@ void loop() {
   static int sf = 7;        // Spread Factor
   static int bw = 0;        // Bandwidth
   static int cr = 5;        // Coding Rate
+  static int pow = 0;       // Transmission power
 
   //////////////////
   /* CHECK PARAMS */
   //////////////////
   double packet_time = getTimePayload(sf, cr, SignalBW[bw]);
-  if (packet_time <= TIME_P) {
+  if (packet_time <= MAX_TIME) {
     LoRa.setSpreadingFactor(sf);
     LoRa.setCodingRate4(cr);
     LoRa.setSignalBandwidth(SignalBW[bw]);
+    
+    /*digitalWrite(LED, HIGH);  
+    delay(250);
+    digitalWrite(LED, LOW);
+    delay(250);*/
+          
+    Serial.print("======= POW: ");
+    Serial.print(pow);
+    Serial.print(", BW: ");
+    Serial.print(bw);
+    Serial.print(", SF: ");
+    Serial.print(sf);
+    Serial.print(", CR: ");
+    Serial.print(cr);
+    Serial.print(", TIME: ");
+    Serial.print(millis());
+    Serial.println(" =======");
 
     //////////////////
     /* UPDATE TIMER */
@@ -103,7 +121,7 @@ void loop() {
     //////////////////
     /* WAIT FOR MSG */
     //////////////////
-    while ((millis() - waitTime) <= TIME_T) {
+    while ((millis() - waitTime) <= (packet_time+EXTRA_TIME)) {
       // READ PORTS
       int packetSize = LoRa.parsePacket();
       
@@ -120,7 +138,7 @@ void loop() {
         printLoraData(packetSize, packet, rssi, snr, sf, SignalBW[bw], cr);
 
         displayLoraData(packetSize, packet, rssi, cr);
-        
+
         // Toggle the led to give a visual indication the packet was sent
         digitalWrite(LED, !digitalRead(LED));
       }
@@ -131,6 +149,10 @@ void loop() {
   ///////////////////////
   /* MODIFY PARAMETERS */
   ///////////////////////
+  if (sf == 12 and bw == 9 and cr == 8) { // We used all cambinations with this transmission power
+    pow = (pow+1)%21;
+  }
+  
   if (bw == 9 and cr == 8) {  // We used all combinations of bandwidth and coding rate with this sp
       sf = (sf-5)%7 + 6; // Change the spread spectrum
   }
@@ -192,7 +214,6 @@ void printLoraData(int packetSize, String packet, String rssi, String snr, int s
   Serial.println("Spreading factor: " + String(sf, DEC));
   Serial.println("Bandwidth:        " + String(bw, DEC));
   Serial.println("Coding rate:      " + String(cr, DEC));
-  Serial.println("------------------------------------");
 }
 
 void showLogo() {
