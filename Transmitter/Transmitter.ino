@@ -24,10 +24,12 @@ DS18B20 ds(2);
 
 #define LED     25 
 
-#define MAX_TIME 10000
+#define MAX_TIME 10000  // MAX PACKET TIME IS 10s
 #define EXTRA_TIME 3500
+#define PREAMBLE_SIZE 16.25
 
 #define MAX(A,B) (A > B ? A : B)
+#define MIN(A,B) (A < B ? A : B)
 
 SSD1306 display(0x3c, OLED_SDA, OLED_SCL);
 
@@ -93,17 +95,31 @@ void loop() {
   //////////////////
   /* CHECK PARAMS */
   //////////////////
-  double packet_time = getTimePayload(sf, cr, SignalBW[bw]);
+  double packet_time = getTimePacket(sf, cr, SignalBW[bw]);
   if (packet_time <= MAX_TIME) {
     LoRa.setSpreadingFactor(sf);
     LoRa.setCodingRate4(cr);
     LoRa.setSignalBandwidth(SignalBW[bw]);
     LoRa.setTxPower(pow);
 
+    Serial.print("======= POW: ");
+    Serial.print(pow);
+    Serial.print(", BW: ");
+    Serial.print(bw);
+    Serial.print(", SF: ");
+    Serial.print(sf);
+    Serial.print(", CR: ");
+    Serial.print(cr);
+    Serial.print(", TIME: ");
+    Serial.print(millis());
+    Serial.println(" =======");
+
+    long CompTime = millis();
+
     //////////////
     /* SEND MSG */
     //////////////
-    Canonicalize the msg, this way it will contain 64 bytes
+    //Canonicalize the msg, this way it will contain 64 bytes
     String countStr = toStringSize(String(counter, DEC),4);
     String powStr = toStringSize(String(pow, DEC), 3);
     String sfStr = toStringSize(String(sf, DEC), 2);
@@ -111,7 +127,7 @@ void loop() {
     bat = analogRead(A7);
     bat = bat * 0.00168;
     String batStr = toStringSize(String(bat, DEC), 7);
-    
+
     // Send packet
     LoRa.beginPacket(sf == 6);
     LoRa.print("counter = ");
@@ -129,20 +145,8 @@ void loop() {
     LoRa.endPacket();
 
     // Display msg
-    displayLoraData(countStr, sf, SignalBW[bw], cr, pow);
-    
-    Serial.print("======= POW: ");
-    Serial.print(pow);
-    Serial.print(", BW: ");
-    Serial.print(bw);
-    Serial.print(", SF: ");
-    Serial.print(sf);
-    Serial.print(", CR: ");
-    Serial.print(cr);
-    Serial.print(", TIME: ");
-    Serial.print(millis());
-    Serial.println(" =======");
-    
+    displayLoraData(countStr, sfStr, SignalBW[bw], cr, powStr);
+
     // Toggle the led to give a visual indication the packet was sent
     digitalWrite(LED, HIGH);  
     delay(250);
@@ -152,7 +156,10 @@ void loop() {
     //////////////////////
     /* WAIT PACKET TIME */
     //////////////////////
-    delay(packet_time+EXTRA_TIME);
+    long interval = getMaxTime(packet_time);
+    CompTime += millis();
+
+    delay(MAX(interval-CompTime,0) + EXTRA_TIME);
     counter++;
   }
 
@@ -168,6 +175,8 @@ void loop() {
   }
 
   if (cr == 8) {  // We used all types of coding rates with this bw
+    // Sync receiver and transmissor
+    while (millis()%MAX_TIME != 0) {}
     bw = (bw+1)%10; // Change the bandwidth
   }
 
@@ -180,25 +189,40 @@ int roundUp(double n) {
   return (double(m) < n ? m+1 : m);
 }
 
+// Returns a period of time where the packet should be read
+long getMaxTime(double packet_time) {
+  long maxTime = 500; // Default 0.5 seconds
+
+  while(packet_time > maxTime) {
+    maxTime *= 2;
+  }
+  return MIN(maxTime,MAX_TIME);
+}
+
 // Returns the symbol time in miliseconds
 double getSymbolTime(int sf, long bw) {
   return (2 << (sf-1))*1000/bw;
 }
 
 // Returns the number of symbols of the payload
-int getNumSymbols(int sf, int cr, int pl, int crc, int ih, int de) {
+long getNumSymbols(int sf, int cr, int pl, int crc, int ih, int de) {
   double num = 8*pl - 4*sf + 28 - 16*crc - 20*ih;
   double denom = 4*(sf-(2*de));
   int n = roundUp(num/denom);
   return 8 + MAX(n*cr,0);
 }
 
-double getTimePayload(int sf, int cr, long bw) {
-  double ts = getSymbolTime(sf, bw);
+long getPayloadSize(int sf, int cr, double ts) {
   int ih = (sf == 6); // With a SF = 6 we must activate the implicit header
   int de = (ts > 16); // Inrease robustness if the symbol is more than 16ms
-  int np = getNumSymbols(sf, cr, 64, 0, ih, de);
-  return ts*np;
+  return getNumSymbols(sf, cr, 64, 0, ih, de);
+}
+
+double getTimePacket(int sf, int cr, long bw) {
+  double ts = getSymbolTime(sf, bw);
+  double payloadSize = getPayloadSize(sf, cr, ts);
+  
+  return (PREAMBLE_SIZE + payloadSize) * ts;
 }
 
 String toStringSize(String num, int size) {
@@ -210,7 +234,7 @@ String toStringSize(String num, int size) {
   return num;
 }
 
-void displayLoraData(String countStr, int sf, long bw, int cr, int pow) {
+void displayLoraData(String countStr, String sfStr, long bw, int cr, String powStr) {
   display.clear();
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   display.setFont(ArialMT_Plain_10);
@@ -218,11 +242,11 @@ void displayLoraData(String countStr, int sf, long bw, int cr, int pow) {
   display.drawString(0, 0, "Sending packet: ");
   display.drawString(90, 0, countStr);
   display.drawString(0, 10, "Power: ");
-  display.drawString(90, 10, String(pow, DEC));
+  display.drawString(90, 10, powStr);
   display.drawString(0, 20, "Bat Volt: ");
   display.drawString(90, 20, String(bat, DEC));
   display.drawString(0, 30, "Spreading factor: ");
-  display.drawString(90, 30, String(sf, DEC));
+  display.drawString(90, 30, sfStr);
   display.drawString(0, 40, "Bandwidth: ");
   display.drawString(90, 40, String(bw, DEC));
   display.drawString(0, 50, "Coding rate: ");

@@ -21,10 +21,12 @@
 
 #define LED     25
 
-#define MAX_TIME 10000
-#define EXTRA_TIME 4500
+#define MAX_TIME 10000  // MAX PACKET TIME IS 10s
+#define EXTRA_TIME 3500
+#define PREAMBLE_SIZE 16.25
 
 #define MAX(A,B) (A > B ? A : B)
+#define MIN(A,B) (A < B ? A : B)
 
 SSD1306 display(0x3c, OLED_SDA, OLED_SCL);
 
@@ -73,7 +75,7 @@ void setup() {
 
   // Set the radio into receive mode
   LoRa.receive();
-  delay(1500);
+  //delay(1500);
 }
 
 void loop() {
@@ -90,16 +92,11 @@ void loop() {
   //////////////////
   /* CHECK PARAMS */
   //////////////////
-  double packet_time = getTimePayload(sf, cr, SignalBW[bw]);
+  double packet_time = getTimePacket(sf, cr, SignalBW[bw]);
   if (packet_time <= MAX_TIME) {
     LoRa.setSpreadingFactor(sf);
     LoRa.setCodingRate4(cr);
     LoRa.setSignalBandwidth(SignalBW[bw]);
-    
-    /*digitalWrite(LED, HIGH);  
-    delay(250);
-    digitalWrite(LED, LOW);
-    delay(250);*/
           
     Serial.print("======= POW: ");
     Serial.print(pow);
@@ -116,12 +113,13 @@ void loop() {
     //////////////////
     /* UPDATE TIMER */
     //////////////////
+    long interval = getMaxTime(packet_time);
     long waitTime = millis();
 
     //////////////////
     /* WAIT FOR MSG */
     //////////////////
-    while ((millis() - waitTime) <= (packet_time+EXTRA_TIME)) {
+    while ((millis() - waitTime) <= (interval+EXTRA_TIME)) {
       // READ PORTS
       int packetSize = LoRa.parsePacket();
       
@@ -145,6 +143,7 @@ void loop() {
       delay(10);
     }
   }
+  // Fer que esperin els dos al mòdul de X quan canvien de BW
   
   ///////////////////////
   /* MODIFY PARAMETERS */
@@ -158,6 +157,8 @@ void loop() {
   }
 
   if (cr == 8) {  // We used all types of coding rates with this bw
+    // Sync receiver and transmissor
+    while (millis()%MAX_TIME != 0) {}
     bw = (bw+1)%10; // Change the bandwidth
   }
 
@@ -170,25 +171,40 @@ int roundUp(double n) {
   return (double(m) < n ? m+1 : m);
 }
 
+// Returns a period of time where the packet should be read
+long getMaxTime(double packet_time) {
+  long maxTime = 500; // Default 0.5 seconds
+
+  while(packet_time > maxTime) {
+    maxTime *= 2;
+  }
+  return MIN(maxTime,MAX_TIME);
+}
+
 // Returns the symbol time in miliseconds
 double getSymbolTime(int sf, long bw) {
   return (2 << (sf-1))*1000/bw;
 }
 
 // Returns the number of symbols of the payload
-int getNumSymbols(int sf, int cr, int pl, int crc, int ih, int de) {
+long getNumSymbols(int sf, int cr, int pl, int crc, int ih, int de) {
   double num = 8*pl - 4*sf + 28 - 16*crc - 20*ih;
   double denom = 4*(sf-(2*de));
   int n = roundUp(num/denom);
   return 8 + MAX(n*cr,0);
 }
 
-double getTimePayload(int sf, int cr, long bw) {
-  double ts = getSymbolTime(sf, bw);
+long getPayloadSize(int sf, int cr, double ts) {
   int ih = (sf == 6); // With a SF = 6 we must activate the implicit header
   int de = (ts > 16); // Inrease robustness if the symbol is more than 16ms
-  int np = getNumSymbols(sf, cr, 64, 0, ih, de);
-  return ts*np;
+  return getNumSymbols(sf, cr, 64, 0, ih, de);
+}
+
+double getTimePacket(int sf, int cr, long bw) {
+  double ts = getSymbolTime(sf, bw);
+  double payloadSize = getPayloadSize(sf, cr, ts);
+  
+  return (PREAMBLE_SIZE + payloadSize) * ts;
 }
 
 void displayLoraData(int packetSize, String packet, String rssi, int cr) {
