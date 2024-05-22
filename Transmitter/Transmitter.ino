@@ -24,9 +24,20 @@ DS18B20 ds(2);
 
 #define LED     25 
 
-#define MAX_TIME 10000  // MAX PACKET TIME IS 10s
-#define EXTRA_TIME 3500
+#define EXTRA_DELAY 1250
+#define MAX_TIME 5000  // MAX PACKET TIME IS 5s
+#define INIT_QUANT 500
 #define PREAMBLE_SIZE 16.25
+#define SYNC_WORD 960220794
+
+#define MIN_SF 7
+#define MAX_SF 12
+#define MIN_BW 0
+#define MAX_BW 2
+#define MIN_CR 5
+#define MAX_CR 8
+#define MIN_POW 2
+#define MAX_POW 20
 
 #define MAX(A,B) (A > B ? A : B)
 #define MIN(A,B) (A < B ? A : B)
@@ -78,109 +89,110 @@ void setup() {
     while (1);
   }
   Serial.println("init ok");
+  LoRa.setSyncWord(SYNC_WORD);
+  delay(320000);
 }
 
 void loop() {
   ///////////////////////
   /* INITIALIZE PARAMS */
   ///////////////////////
-  static long SignalBW[] = {7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, 500E3};
+  static long SignalBW[] = {125E3, 250E3, 500E3};
+  
+  //static int counter = 0;   // To keep track of the number of packages sent
+  
+  static int sf = MIN_SF;   // Spread Factor
+  static int bw = MIN_BW;   // Bandwidth
+  static int cr = MIN_CR;   // Coding Rate
+  static int pow = MIN_POW; // Transmission power
 
-  static int counter = 0;   // To keep track of the number of packages sent
-  static int sf = 7;        // Spread Factor
-  static int bw = 0;        // Bandwidth
-  static int cr = 5;        // Coding Rate
-  static int pow = 0;       // Transmission power
+  LoRa.setSpreadingFactor(sf);
+  LoRa.setCodingRate4(cr);
+  LoRa.setSignalBandwidth(SignalBW[bw]);
+  LoRa.setTxPower(pow);
+          
+  /*Serial.print("======= POW: ");
+  Serial.print(pow);
+  Serial.print(", BW: ");
+  Serial.print(bw);
+  Serial.print(", SF: ");
+  Serial.print(sf);
+  Serial.print(", CR: ");
+  Serial.print(cr);
+  Serial.print(", TIME: ");
+  Serial.print(millis());
+  Serial.println(" =======");
+*/
+  //long CompTime = -millis();
 
-  //////////////////
-  /* CHECK PARAMS */
-  //////////////////
-  double packet_time = getTimePacket(sf, cr, SignalBW[bw]);
-  if (packet_time <= MAX_TIME) {
-    LoRa.setSpreadingFactor(sf);
-    LoRa.setCodingRate4(cr);
-    LoRa.setSignalBandwidth(SignalBW[bw]);
-    LoRa.setTxPower(pow);
+  //////////////
+  /* SEND MSG */
+  //////////////
+  //Canonicalize the msg, this way it will contain 64 bytes
+  //String countStr = toStringSize(String(counter, DEC),4);
+  String powStr = toStringSize(String(pow, DEC), 3);
+  String sfStr = toStringSize(String(sf, DEC), 2);
+  String timeStr = toStringSize(String(millis(), DEC), 10);
 
-    Serial.print("======= POW: ");
-    Serial.print(pow);
-    Serial.print(", BW: ");
-    Serial.print(bw);
-    Serial.print(", SF: ");
-    Serial.print(sf);
-    Serial.print(", CR: ");
-    Serial.print(cr);
-    Serial.print(", TIME: ");
-    Serial.print(millis());
-    Serial.println(" =======");
+  bat = analogRead(A7);
+  bat = bat * 0.00168;
+  String batStr = toStringSize(String(bat, DEC), 7);
 
-    long CompTime = millis();
+  // Send packet
+  LoRa.beginPacket(sf == 6);
+  LoRa.print("t = ");
+  LoRa.print(timeStr);
+  LoRa.print(" TP = ");
+  LoRa.print(powStr);
+  LoRa.print(" bat = ");
+  LoRa.print(batStr);
+  LoRa.print(" sf = ");
+  LoRa.print(sfStr);
+  LoRa.print(" cr = ");
+  LoRa.print(cr);
+  LoRa.print(" bw = "); 
+  LoRa.print(bw);
+  LoRa.endPacket(true);
 
-    //////////////
-    /* SEND MSG */
-    //////////////
-    //Canonicalize the msg, this way it will contain 64 bytes
-    String countStr = toStringSize(String(counter, DEC),4);
-    String powStr = toStringSize(String(pow, DEC), 3);
-    String sfStr = toStringSize(String(sf, DEC), 2);
+  // Display msg
+  displayLoraData(timeStr, sfStr, SignalBW[bw], cr, powStr);
 
-    bat = analogRead(A7);
-    bat = bat * 0.00168;
-    String batStr = toStringSize(String(bat, DEC), 7);
-
-    // Send packet
-    LoRa.beginPacket(sf == 6);
-    LoRa.print("counter = ");
-    LoRa.print(countStr);
-    LoRa.print(", TP = ");
-    LoRa.print(powStr);
-    LoRa.print(", bat = ");
-    LoRa.print(batStr);
-    LoRa.print(", sf = ");
-    LoRa.print(sfStr);
-    LoRa.print(", cr = ");
-    LoRa.print(cr);
-    LoRa.print(", bw = "); 
-    LoRa.print(bw);
-    LoRa.endPacket();
-
-    // Display msg
-    displayLoraData(countStr, sfStr, SignalBW[bw], cr, powStr);
-
-    // Toggle the led to give a visual indication the packet was sent
-    digitalWrite(LED, HIGH);  
-    delay(250);
-    digitalWrite(LED, LOW);
-    delay(250);
-    
-    //////////////////////
-    /* WAIT PACKET TIME */
-    //////////////////////
-    long interval = getMaxTime(packet_time);
-    CompTime += millis();
-
-    delay(MAX(interval-CompTime,0) + EXTRA_TIME);
-    counter++;
-  }
+  // Toggle the led to give a visual indication the packet was sent
+  digitalWrite(LED, HIGH);  
+  delay(250);
+  digitalWrite(LED, LOW);
+  delay(250);
+  
+  //////////////////////
+  /* WAIT PACKET TIME */
+  //////////////////////
+  //CompTime += millis();
+  long waitTime = quantizeTime(getTimePacket(sf, cr, SignalBW[bw]));
+  
+  delay(MAX(waitTime-500,0));
+  Serial.println(waitTime);
+  //counter++;
 
   ///////////////////////
   /* MODIFY PARAMETERS */
   ///////////////////////
-  if (sf == 12 and bw == 9 and cr == 8) { // We used all cambinations with this transmission power
-    pow = (pow+1)%21;
+  // We used all cambinations with this transmission power
+  if (sf == MAX_SF and bw == MAX_BW and cr == MAX_CR) {
+    pow = (pow+(1-MIN_POW))%(MAX_POW-MIN_POW+1)+MIN_POW;
+    if (pow == MIN_POW) delay(300000);
   }
   
-  if (bw == 9 and cr == 8) {  // We used all combinations of bandwidth and coding rate with this sp
-      sf = (sf-5)%7 + 6; // Change the spread spectrum
+  // We used all combinations of bandwidth and coding rate with this sp
+  if (bw == MAX_BW and cr == MAX_CR) {  
+      sf = (sf)%6 + MIN_SF; // Change the spread spectrum
   }
 
-  if (cr == 8) {  // We used all types of coding rates with this bw
-    // Sync receiver and transmissor
-    while (millis()%MAX_TIME != 0) {}
-    bw = (bw+1)%10; // Change the bandwidth
+  // We used all types of coding rates with this bw
+  if (cr == MAX_CR) {
+    bw = (bw+1)%3; // Change the bandwidth
   }
 
-  cr = (cr-4)%4 + 5; // Change the coding rate
+  cr = (cr-4)%4 + MIN_CR; // Change the coding rate
 }
 
 // Returns the smallest integer bigger than or equal to n
@@ -189,25 +201,27 @@ int roundUp(double n) {
   return (double(m) < n ? m+1 : m);
 }
 
-// Returns a period of time where the packet should be read
-long getMaxTime(double packet_time) {
-  long maxTime = 500; // Default 0.5 seconds
+// Sets a generic wait time
+long quantizeTime(double packet_time) {
+  double time = INIT_QUANT;
 
-  while(packet_time > maxTime) {
-    maxTime *= 2;
+  while (packet_time > time) {
+    time *= 2;
   }
-  return MIN(maxTime,MAX_TIME);
+
+  return (time <= MAX_TIME ? time+EXTRA_DELAY : MAX_TIME+2*EXTRA_DELAY);
 }
 
 // Returns the symbol time in miliseconds
 double getSymbolTime(int sf, long bw) {
-  return (2 << (sf-1))*1000/bw;
+  return (double)(1 << sf)*1000/bw;
 }
+
 
 // Returns the number of symbols of the payload
 long getNumSymbols(int sf, int cr, int pl, int crc, int ih, int de) {
-  double num = 8*pl - 4*sf + 28 - 16*crc - 20*ih;
-  double denom = 4*(sf-(2*de));
+  double num = (double)(8*pl - 4*sf + 28 - 16*crc - 20*ih);
+  double denom = (double)(4*(sf-(2*de)));
   int n = roundUp(num/denom);
   return 8 + MAX(n*cr,0);
 }
